@@ -232,46 +232,88 @@ class AddColorBackgroundView(APIView):
 
 
 
-from rest_framework.views import APIView
-from rest_framework.parsers import MultiPartParser, FormParser
-from super_image import EdsrModel, ImageLoader
-from PIL import Image, ImageFilter
+# from rest_framework.views import APIView
+# from rest_framework.parsers import MultiPartParser, FormParser
+# from super_image import EdsrModel, ImageLoader
+# from PIL import Image, ImageFilter
+# import torch
+# from io import BytesIO
+# from django.http import HttpResponse
+# from torchvision.transforms import ToPILImage, ToTensor
+
+# class EnhanceImageView(APIView):
+#     parser_classes = (MultiPartParser, FormParser)
+
+#     def __init__(self, **kwargs):
+#         super().__init__(**kwargs)
+#         self.model = EdsrModel.from_pretrained('eugenesiow/edsr-base', scale=4)
+
+#     def post(self, request, *args, **kwargs):
+#         try:
+#             image_file = request.FILES.get('image')
+#             if not image_file:
+#                 return Response({'error': 'No image file provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+#             image = Image.open(image_file).convert("RGB")
+#             inputs = ToTensor()(image).unsqueeze(0)
+
+#             with torch.no_grad():
+#                 preds = self.model(inputs).clamp(0, 1)
+
+#             output_image = ToPILImage()(preds.squeeze(0)).convert("RGB")
+#             output_image = output_image.filter(ImageFilter.SMOOTH)
+
+#             buffer = BytesIO()
+#             output_image.save(buffer, format="JPEG")
+#             buffer.seek(0)
+
+#             return HttpResponse(buffer, content_type='image/jpeg')
+
+#         except Exception as e:
+#             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+import os.path as osp
+import glob2
+import cv2
+import numpy as np
 import torch
-from io import BytesIO
-from django.http import HttpResponse
-from torchvision.transforms import ToPILImage, ToTensor
+import RRDBNet_arch as arch
+
 
 class EnhanceImageView(APIView):
-    parser_classes = (MultiPartParser, FormParser)
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.model = EdsrModel.from_pretrained('eugenesiow/edsr-base', scale=4)
-
-    def post(self, request, *args, **kwargs):
+    def post(self,request):
         try:
-            image_file = request.FILES.get('image')
-            if not image_file:
-                return Response({'error': 'No image file provided.'}, status=status.HTTP_400_BAD_REQUEST)
+            model_path = 'models/RRDB_ESRGAN_x4.pth'  
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            model = arch.RRDBNet(3, 3, 64, 23, gc=32)
+            model.load_state_dict(torch.load(model_path), strict=True)
+            model.eval()
+            model = model.to(device)
 
-            image = Image.open(image_file).convert("RGB")
-            inputs = ToTensor()(image).unsqueeze(0)
+            print('Model path {:s}. \nTesting...'.format(model_path))
+            path=request.FILES.get('image')
+            img = cv2.imread(path, cv2.IMREAD_COLOR)
+            img = img * 1.0 / 255
+            img = torch.from_numpy(np.transpose(img[:, :, [2, 1, 0]], (2, 0, 1))).float()
+            img_LR = img.unsqueeze(0)
+            img_LR = img_LR.to(device)
 
             with torch.no_grad():
-                preds = self.model(inputs).clamp(0, 1)
+                output = model(img_LR).data.squeeze().float().cpu().clamp_(0, 1).numpy()
+                output = np.transpose(output[[2, 1, 0], :, :], (1, 2, 0))
+                output = (output * 255.0).round()
 
-            output_image = ToPILImage()(preds.squeeze(0)).convert("RGB")
-            output_image = output_image.filter(ImageFilter.SMOOTH)
-
-            buffer = BytesIO()
-            output_image.save(buffer, format="JPEG")
+            pil_img = Image.fromarray(output)
+            buffer = io.BytesIO()
+            pil_img.save(buffer, format="JPEG")
             buffer.seek(0)
 
-            return HttpResponse(buffer, content_type='image/jpeg')
+            # Return the image as an HTTP response
+            return HttpResponse(buffer, content_type="image/jpeg")
 
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST) 
 
 
